@@ -1,0 +1,24 @@
+# Build output and local caches
+/dist/
+/.cache/
+/translator
+*.test
+coverage.out
+
+# Local settings and credentials
+.env
+.env.*
+!.env.example
+settings.json
+/credentials/
+CodexTranslator/
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Logs and editor / OS files
+*.log
+.DS_Store
+.idea/
+.vscode/

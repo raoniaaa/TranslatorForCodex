@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+ <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+ <meta name="color-scheme" content="dark"><title>Translator · Codex 输入翻译</title>
+ <link rel="stylesheet" href="./style.css"><script defer src="./app.js"></script>
+</head>
+<body>
+ <main class="shell">
+  <header class="topbar">
+   <div class="brand"><div class="brand-icon" aria-hidden="true">译<span>↗</span></div><div><strong>Translator</strong><span class="brand-caption">为 Codex 准备的输入翻译</span></div></div>
+   <div class="top-meta"><span class="version">MAC PREVIEW · 0.1</span><span class="connection" id="connection"><i></i> 正在连接</span></div>
+  </header>
+  <section class="intro"><div><p class="eyebrow">THINK IN CHINESE. TYPE IN ENGLISH.</p><h1>中文思考，英文表达<span>。</span></h1><p class="muted">沿用你的输入法，让翻译在 Codex 的输入框里完成。</p></div><button class="button secondary" id="demo" type="button"><span aria-hidden="true">◈</span> 看看翻译宠物</button></section>
+  <section class="status-card" id="status-card" data-phase="idle" aria-live="polite">
+   <div class="status-symbol" id="status-symbol" aria-hidden="true">↔</div>
+   <div class="status-copy"><div class="status-line"><h2 id="status-title">准备连接你的翻译服务</h2><span id="status-tag" class="tag">未开启</span></div><p id="status-detail">填写 API 地址和模型，保存后即可开始。</p></div>
+   <button type="button" class="button primary" id="connect">开启翻译模式 <span aria-hidden="true">↗</span></button>
+  </section>
+  <div class="workspace">
+   <section class="card settings">
+    <div class="section-heading"><h2>翻译服务</h2><span class="tiny-badge">自定义 API</span></div>
+    <p class="section-note">使用兼容 Chat Completions 的服务。</p>
+    <form id="config-form">
+     <label for="base-url">API 地址</label><input id="base-url" type="url" placeholder="https://api.example.com/v1" required spellcheck="false" autocomplete="off">
+     <p class="field-hint">支持基础地址或完整的 /chat/completions 地址。</p>
+     <label for="model">模型名称</label><input id="model" placeholder="服务提供方的模型 ID" required spellcheck="false" autocomplete="off">
+     <label for="api-key" class="label-line"><span>API Key</span><span id="key-state">保存在本机本地文件，重启自动恢复</span></label>
+     <div class="secret-field"><input id="api-key" type="password" placeholder="填写密钥，本地服务可留空" autocomplete="off" spellcheck="false"><button type="button" id="show-key" aria-label="显示密钥" title="显示密钥">显示</button></div>
+     <button type="button" class="button small" id="clear-key" disabled>删除已保存密钥</button>
+     <div class="delay-line"><label for="delay">整段翻译前的停顿</label><output id="delay-value" for="delay">2000 ms</output></div>
+     <input id="delay" type="range" min="400" max="3000" step="100" value="2000"><div class="range-labels"><span>更快响应</span><span>更完整的句子</span></div>
+     <button type="submit" class="button save" id="save">保存设置</button>
+     <p class="feedback" id="config-feedback" role="status"></p>
+    </form>
+    <div class="permission-row"><div><span class="permission-dot" id="permission-dot"></span><strong id="permission-title">检查桌面连接</strong><p id="permission-detail">读取输入框需要辅助功能权限。</p></div><button class="text-button" id="permission" type="button">去开启 ↗</button></div>
+    <div class="permission-actions" id="permission-actions" hidden><button type="button" class="text-button" id="permission-recheck">重新检测权限</button><button type="button" class="text-button" id="reveal-app">定位当前应用 ↗</button></div>
+   </section>
+   <div class="right-column">
+    <section class="card translation-card">
+     <div class="section-heading"><h2>翻译预览</h2><div class="segmented" role="group" aria-label="预览来源"><button type="button" id="tab-try" aria-pressed="true">试译</button><button type="button" id="tab-live" aria-pressed="false">Codex 草稿</button></div></div>
+     <div id="try-panel">
+      <div class="text-heading"><label for="source">中文原文</label><span class="language-tag">ZH</span></div>
+      <textarea id="source" spellcheck="false" placeholder="输入一句中文，试试你的翻译服务…">请帮我检查这段代码，保留 API 和变量名。</textarea>
+      <div class="translation-divider"><span aria-hidden="true">↓</span><span id="preview-status" role="status">配置服务后即可试译</span><button type="button" class="button small" id="translate">试译 <span aria-hidden="true">↗</span></button></div>
+      <div class="text-heading"><span>英文译文</span><span class="language-tag">EN</span></div>
+      <div class="result placeholder" id="result" aria-live="polite">译文会出现在这里。</div>
+      <div class="result-footer"><span id="latency">保留代码、链接和技术术语</span><button type="button" class="text-button" id="copy" disabled>复制译文</button></div>
+     </div>
+     <div id="live-panel" hidden>
+      <div class="text-heading"><span>最近一次原文</span><span class="language-tag">ZH</span></div><div class="live-text muted" id="live-source">连接 Codex 后，最近一次翻译的原文会出现在这里。</div>
+      <div class="translation-divider"><span aria-hidden="true">↓</span><span>只保留本次运行的最近结果</span></div>
+      <div class="text-heading"><span>英文译文</span><span class="language-tag">EN</span></div><div class="live-text muted" id="live-result">尚无翻译记录</div>
+      <div class="result-footer"><span id="live-latency">离开输入框会自动暂停</span><span class="shortcut">⌃ ⌥ R <span>恢复原文</span></span></div>
+     </div>
+    </section>
+    <section class="guide">
+     <div class="guide-heading"><h2>在 Codex 里这样使用</h2><span class="shortcut">⌃ ⌥ E <span>开启 / 暂停</span></span></div>
+     <ol><li><span>01</span><div><strong>点击消息输入框</strong><p>小宠物自动出现，点击一次开启模式，再点关闭。</p></div></li><li><span>02</span><div><strong>输入完整后稍作停顿</strong><p>默认停顿 2 秒后整段翻译；继续输入会取消旧结果。</p></div></li><li><span>03</span><div><strong>确认后照常发送</strong><p>工具只替换草稿；按 ⌘Z 可以撤销。</p></div></li></ol>
+    </section>
+   </div>
+  </div>
+  <footer><span><i></i> 系统拼音 / ABC · 候选窗保护（实验）</span><span>仅在开启后，将当前草稿发送到你配置的服务。</span></footer>
+ </main>
+ <div class="toast" id="toast" role="status" hidden></div>
+ <div class="demo-hud" id="demo-hud" hidden aria-live="polite"><span id="demo-symbol">◌</span><div><strong id="demo-title"></strong><p id="demo-detail"></p></div></div>
+</body>
+</html>
