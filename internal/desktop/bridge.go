@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -28,9 +29,9 @@ func Start(root, settingsURL string, receive func(Event)) (*Bridge, error) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
-		cmd = exec.Command(filepath.Join(root, "translator-bridge"), settingsURL)
+		cmd = exec.Command(filepath.Join(root, "Translator"), settingsURL)
 	case "windows":
-		cmd = exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-File", filepath.Join(root, "bridge.ps1"), "-SettingsURL", settingsURL)
+		return nil, fmt.Errorf("请运行 Translator.exe 启动 Windows 应用")
 	default:
 		return nil, fmt.Errorf("此原型支持 Windows 和 macOS")
 	}
@@ -67,8 +68,28 @@ func (b *Bridge) Send(v any) error {
 	return json.NewEncoder(b.in).Encode(v)
 }
 func (b *Bridge) Close() {
+	if b.cmd == nil {
+		return
+	}
 	_ = b.in.Close()
 	if b.cmd.Process != nil {
 		_ = b.cmd.Process.Kill()
 	}
+}
+
+// Attach connects the backend to the native app that launched it.
+func Attach(receive func(Event)) *Bridge {
+	b := &Bridge{in: os.Stdout}
+	go func() {
+		scan := bufio.NewScanner(os.Stdin)
+		scan.Buffer(make([]byte, 4096), 1<<20)
+		for scan.Scan() {
+			var event Event
+			if json.Unmarshal(scan.Bytes(), &event) == nil {
+				receive(event)
+			}
+		}
+		receive(Event{Snapshot: engine.Snapshot{Type: "quit"}})
+	}()
+	return b
 }

@@ -43,31 +43,29 @@ type Replacement struct {
 	ReplaceLength   int    `json:"replaceLength"`
 	InsertText      string `json:"insertText"`
 }
+
+// Busy describes only the current explicit request, never a continuous mode.
 type State struct {
-	Armed       bool     `json:"armed"`
+	Busy        bool     `json:"busy"`
 	Phase       string   `json:"phase"`
 	Status      string   `json:"status"`
 	Original    string   `json:"original"`
 	Translation string   `json:"translation"`
 	LatencyMS   int64    `json:"latencyMs"`
 	Revision    uint64   `json:"revision"`
-	DelayMS     int      `json:"delayMs"`
+	DelayMS     int      `json:"delayMs"` // Read old preferences without enabling timed translation.
 	Current     Snapshot `json:"-"`
-	target      string
-	changed     time.Time
-	attempted   uint64
+	requested   bool
 	pending     *Job
 	applying    *Replacement
 	appliedAt   time.Time
-	lastSource  string
+	lastTarget  string
 	lastOutput  string
-	lastApplied string
 	lastBefore  string
-	suppressed  string
 }
 
 func New() *State {
-	return &State{Phase: "idle", Status: "配置服务后，点击宠物开启持续翻译模式", DelayMS: 2000}
+	return &State{Phase: "idle", Status: "输入完成后，点击宠物翻译当前整段草稿", DelayMS: 2000}
 }
 func HasChinese(s string) bool {
 	for _, r := range s {
@@ -78,201 +76,120 @@ func HasChinese(s string) bool {
 	return false
 }
 func (s *State) set(phase, message string) { s.Phase = phase; s.Status = message }
+func eligible(v Snapshot) bool             { return v.Trusted && v.Supported && v.Editable && v.Target != "" }
+func sameDraft(a, b Snapshot) bool {
+	return a.Target == b.Target && a.Text == b.Text && a.SelectionStart == b.SelectionStart && a.SelectionLength == b.SelectionLength && a.Composing == b.Composing && a.CompositionKnown == b.CompositionKnown && eligible(a) == eligible(b)
+}
+func (s *State) cancel() {
+	s.Busy = false
+	s.requested = false
+	s.pending = nil
+	s.applying = nil
+	s.Revision++
+}
 func (s *State) Reset(reason string) {
-	s.Armed = false
-	s.target = ""
-	s.pending = nil
-	s.applying = nil
-	s.Revision++
-	s.lastSource = ""
+	s.cancel()
+	s.lastTarget = ""
 	s.lastOutput = ""
-	s.lastApplied = ""
 	s.lastBefore = ""
-	s.suppressed = ""
-	s.set("paused", reason)
-}
-func eligible(v Snapshot) bool {
-	return v.Trusted && v.Supported && v.Editable && v.Target != ""
-}
-func (s *State) invalidate() {
-	s.pending = nil
-	s.applying = nil
-	s.Revision++
-}
-func (s *State) Toggle(now time.Time) {
-	if s.Armed {
-		s.Reset("翻译模式已关闭，点击宠物可再次开启")
-		return
-	}
-	// The switch represents the user's intent, independently of focus or permission.
-	s.Armed = true
-	s.target = ""
-	s.changed = now
-	s.attempted = 0
-	s.invalidate()
-	s.Observe(s.Current, now)
+	s.set("idle", reason)
 }
 func (s *State) Observe(v Snapshot, now time.Time) {
 	old := s.Current
 	s.Current = v
-	if !s.Armed {
+	if s.Busy && !sameDraft(old, v) {
+		// Native writes are acknowledged before the next snapshot. Never carry a
+		// click across edits, composition changes, lost focus or permission changes.
+		s.cancel()
+		s.set("cancelled", "输入状态已改变，本次翻译已取消；写好后再点击宠物")
+		return
+	}
+	if s.Busy {
+		return
+	}
+	if !v.Trusted {
+		s.set("permission", "请为 Translator 开启辅助功能权限")
 		return
 	}
 	if !eligible(v) {
-		if eligible(old) || s.pending != nil || s.applying != nil {
-			s.invalidate()
-		}
-		if !v.Trusted {
-			s.set("permission", "翻译模式已开启，等待辅助功能授权")
-		} else {
-			s.set("waiting-focus", "翻译模式已开启，回到 Codex 输入框会自动继续")
-		}
+		s.set("waiting-focus", "点击 Codex 输入框，写好后再点击宠物")
 		return
 	}
-	if v.Target != s.target {
-		s.invalidate()
-		s.target = v.Target
-		s.lastSource = ""
-		s.lastOutput = ""
-		s.lastApplied = ""
-		s.lastBefore = ""
-		s.suppressed = ""
-		s.changed = now
-		s.attempted = 0
-		s.set("ready", "翻译模式已开启，正常输入中文即可")
-	} else if !eligible(old) {
-		// Recheck and debounce the returning draft before resuming.
-		s.invalidate()
-		s.changed = now
-		s.attempted = 0
-		s.set("waiting", "已回到输入框，等待输入停顿…")
-	}
-
-	changed := old.Text != v.Text || old.SelectionStart != v.SelectionStart || old.SelectionLength != v.SelectionLength || old.Composing != v.Composing || old.CompositionKnown != v.CompositionKnown || old.AtEnd != v.AtEnd
-	if changed {
-		s.Revision++
-		s.changed = now
-		s.pending = nil
-		if s.applying != nil && v.Text != s.applying.Text {
-			s.applying = nil
-		}
-		if s.suppressed != "" && v.Text != s.suppressed {
-			s.suppressed = ""
-		}
-		// Native Cmd+Z must not cause the same draft to be translated again.
-		if s.lastOutput != "" && old.Text == s.lastApplied && v.Text == s.lastBefore {
-			s.suppressed = v.Text
-			s.lastOutput = ""
-			s.lastApplied = ""
-			s.lastSource = ""
-			s.lastBefore = ""
-			s.set("restored", "已撤销，本段原文暂不再自动翻译")
-			return
-		}
-		if v.Text == s.suppressed && s.suppressed != "" {
-			s.set("restored", "已恢复中文，继续编辑后恢复翻译")
-			return
-		}
-		if v.Composing {
-			s.set("composing", "等待中文选词完成")
-		} else if !v.CompositionKnown {
-			s.set("unsupported", "当前输入法暂不支持自动替换")
-		} else if s.lastOutput != "" && v.Text == s.lastOutput {
-			s.set("success", "英文已填入，可继续输入中文")
+	if !sameDraft(old, v) {
+		if s.lastTarget == v.Target && s.lastOutput == v.Text && s.lastOutput != "" {
+			s.set("success", "英文已填入，下一次翻译由你点击触发")
 		} else {
-			s.set("waiting", "等待输入停顿…")
+			s.set("ready", "写好后点击宠物，翻译当前整段草稿")
 		}
 	}
 }
-func (s *State) Next(now time.Time) *Job {
-	v := s.Current
-	if s.applying != nil && now.Sub(s.appliedAt) > 3*time.Second {
-		s.invalidate()
-		s.attempted = s.Revision
-		s.set("error", "写入确认超时，已保留草稿；继续编辑后重试")
-		return nil
+
+// Request captures only the focused draft supplied with this explicit click.
+// Repeated clicks while busy do not queue another translation.
+func (s *State) Request(v Snapshot, now time.Time) {
+	if s.Busy {
+		return
 	}
-	if !s.Armed || s.pending != nil || s.applying != nil {
-		return nil
-	}
+	s.Observe(v, now)
 	if !eligible(v) {
-		if !v.Trusted {
-			s.set("permission", "翻译模式已开启，等待辅助功能授权")
-		} else {
-			s.set("waiting-focus", "翻译模式已开启，回到 Codex 输入框会自动继续")
-		}
-		return nil
-	}
-	if v.Composing {
-		s.set("composing", "等待中文选词完成")
-		return nil
+		return
 	}
 	if !v.CompositionKnown {
-		s.set("unsupported", "当前输入法暂不支持自动替换")
-		return nil
+		s.set("unsupported", "无法确认输入法组合状态，请完成选词并重新点击输入框")
+		return
 	}
-	if !v.AtEnd || v.SelectionLength != 0 {
-		s.set("editing", "正在编辑，光标回到末尾后继续")
-		return nil
+	if v.Composing {
+		s.set("composing", "请先完成中文选词，再点击宠物翻译")
+		return
 	}
-	if v.Text == s.suppressed && s.suppressed != "" {
-		return nil
+	length := len(utf16.Encode([]rune(v.Text)))
+	if v.SelectionStart < 0 || v.SelectionLength < 0 || v.SelectionStart > length || v.SelectionLength > length-v.SelectionStart {
+		s.set("error", "无法确定当前选区，请重新点击输入框")
+		return
 	}
-	if s.lastOutput != "" && v.Text == s.lastOutput {
-		s.set("success", "英文已填入，可继续输入中文")
-		return nil
-	}
-	if !HasChinese(v.Text) || strings.TrimSpace(v.Text) == "" {
-		if s.Phase != "success" && s.Phase != "restored" {
-			s.set("ready", "已开启，等待中文输入")
-		}
-		return nil
-	}
-	if s.attempted == s.Revision {
-		return nil
-	}
-	if now.Sub(s.changed) < time.Duration(s.DelayMS)*time.Millisecond {
-		s.set("waiting", "等待输入停顿…")
-		return nil
+	if !HasChinese(v.Text) {
+		s.set("ready", "当前草稿没有需要翻译的中文")
+		return
 	}
 	if strings.Count(v.Text, "```")%2 != 0 {
-		s.set("editing", "等待代码块输入完整")
+		s.set("editing", "代码块尚未闭合，补齐后再点击宠物")
+		return
+	}
+	s.Revision++
+	s.Busy = true
+	s.requested = true
+	s.set("checking", "正在检查当前草稿…")
+}
+func (s *State) Next(now time.Time) *Job {
+	if s.applying != nil && now.Sub(s.appliedAt) > 3*time.Second {
+		s.cancel()
+		s.set("error", "写入确认超时，请检查草稿后再点击重试")
 		return nil
 	}
-	source := v.Text
-	if s.lastOutput != "" && strings.HasPrefix(v.Text, s.lastOutput) {
-		tail := strings.TrimPrefix(v.Text, s.lastOutput)
-		if !HasChinese(tail) {
-			s.set("ready", "等待新增中文")
-			return nil
-		}
-		// Preserve original meaning when extending a previously translated draft.
-		source = s.lastSource + tail
+	if !s.requested || !s.Busy {
+		return nil
 	}
-	j := &Job{Revision: s.Revision, Snapshot: v, Source: source, Started: now}
-
+	s.requested = false
+	j := &Job{Revision: s.Revision, Snapshot: s.Current, Source: s.Current.Text, Started: now}
 	s.pending = j
-	s.attempted = s.Revision
-	s.Original = v.Text
+	s.Original = j.Source
 	s.LatencyMS = 0
-	s.set("translating", "正在翻译，请稍候…")
+	s.set("translating", "正在翻译整段草稿，请稍候…")
 	return j
 }
 func (s *State) Complete(j Job, translation string, err error) *Replacement {
-	v := s.Current
-	if s.pending == nil || !s.Armed || !eligible(v) || j.Revision != s.Revision || j.Revision != s.pending.Revision || j.Snapshot.Target != v.Target || j.Snapshot.Text != v.Text || !v.CompositionKnown || v.Composing || !v.AtEnd || v.SelectionLength != 0 || v.SelectionStart != j.Snapshot.SelectionStart {
+	if s.pending == nil || !s.Busy || j.Revision != s.Revision || j.Revision != s.pending.Revision || !eligible(s.Current) || !sameDraft(j.Snapshot, s.Current) {
 		return nil
 	}
 	s.pending = nil
 	s.LatencyMS = time.Since(j.Started).Milliseconds()
 	if err != nil {
-		s.set("error", err.Error())
+		s.Busy = false
+		s.set("error", err.Error()+"；点击宠物可重试")
 		return nil
 	}
-	s.Original = v.Text
 	s.Translation = translation
-	r := makeReplacement(j.Revision, v, translation)
-	r.Source = j.Source
+	r := makeReplacement(j.Revision, s.Current, translation)
 	s.applying = r
 	s.appliedAt = time.Now()
 	s.set("applying", "正在填入完整译文…")
@@ -284,47 +201,42 @@ func (s *State) Acknowledge(id uint64, ok bool, reason string) {
 		return
 	}
 	s.applying = nil
+	s.Busy = false
 	if !ok {
-		s.lastSource = ""
 		s.lastOutput = ""
-		s.lastApplied = ""
-		s.lastBefore = ""
-		s.set("error", "未替换："+reason)
+		s.set("error", "未确认替换："+reason)
 		return
 	}
 	if r.Undo {
-		s.suppressed = r.Text
-		s.lastSource = ""
+		s.lastTarget = ""
 		s.lastOutput = ""
-		s.lastApplied = ""
 		s.lastBefore = ""
-		s.set("restored", "已恢复中文，继续编辑后恢复翻译")
+		s.set("restored", "已恢复替换前的草稿，点击宠物才会再次翻译")
 		return
 	}
-	s.lastSource = r.Source
+	s.lastTarget = r.Target
 	s.lastOutput = r.Text
-	s.lastApplied = r.Text
 	s.lastBefore = r.Expected
-	s.set("success", "英文已填入，可继续输入中文")
+	s.set("success", "英文已填入，下一次翻译由你点击触发")
 	if reason != "" {
 		s.Status = reason
 	}
 }
 func (s *State) Undo() *Replacement {
-	if !s.Armed || !eligible(s.Current) || s.Current.Target != s.target || s.applying != nil || s.lastOutput == "" || s.Current.Text != s.lastApplied || !s.Current.AtEnd || s.Current.SelectionLength != 0 || s.Current.Composing || !s.Current.CompositionKnown {
-		s.set("error", "草稿已改变，无法直接恢复；可以使用 ⌘Z")
+	v := s.Current
+	if s.Busy || !eligible(v) || s.lastTarget != v.Target || s.lastOutput == "" || v.Text != s.lastOutput || v.Composing || !v.CompositionKnown {
+		s.set("error", "草稿已改变或正在处理，无法直接恢复；请使用编辑器的撤销功能")
 		return nil
 	}
 	s.Revision++
-	s.pending = nil
-	r := makeReplacement(s.Revision, s.Current, s.lastBefore)
+	r := makeReplacement(s.Revision, v, s.lastBefore)
 	r.Undo = true
+	s.Busy = true
 	s.applying = r
 	s.appliedAt = time.Now()
+	s.set("applying", "正在恢复替换前的草稿…")
 	return r
 }
-
-// A single whole-draft write; offsets use UTF-16 for macOS accessibility.
 func makeReplacement(id uint64, snapshot Snapshot, text string) *Replacement {
 	return &Replacement{Type: "replace", ID: id, Target: snapshot.Target, Expected: snapshot.Text, Text: text, SelectionStart: snapshot.SelectionStart, SelectionLength: snapshot.SelectionLength,
 		ReplaceStart: 0, ReplaceLength: len(utf16.Encode([]rune(snapshot.Text))), InsertText: text}

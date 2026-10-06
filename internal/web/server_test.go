@@ -172,41 +172,42 @@ func TestFailedPersistencePreservesConfiguration(t *testing.T) {
 		t.Fatal("failed config write damaged old key or leaked new key")
 	}
 }
-func TestTranslationModeSurvivesFocusAndSettingsChanges(t *testing.T) {
+func TestOnlyExplicitNativeClickRequestsTranslation(t *testing.T) {
 	setupConfig(t)
-	store := &memorySecrets{keys: map[string]string{}}
-	a := startTest(t, store)
+	a := startTest(t, &memorySecrets{keys: map[string]string{}})
 	saveTest(t, a, firstConfig, 200)
-	a.Receive(desktop.Event{Snapshot: engine.Snapshot{Type: "snapshot", Trusted: true}})
+	snapshot := engine.Snapshot{Type: "snapshot", Trusted: true, Supported: true, Editable: true, Target: "codex:1", Text: "中文", SelectionStart: 0, AtEnd: false, CompositionKnown: true}
+	a.Receive(desktop.Event{Snapshot: snapshot})
 	a.Receive(desktop.Event{Snapshot: engine.Snapshot{Type: "connect"}})
 	a.mu.Lock()
-	armed, phase := a.state.Armed, a.state.Phase
+	busy := a.state.Busy
 	a.mu.Unlock()
-	if !armed || phase != "waiting-focus" {
-		t.Fatal("could not enable before composer focus")
+	if busy {
+		t.Fatal("focus or connect started translation")
 	}
-	a.Receive(desktop.Event{Snapshot: engine.Snapshot{Type: "snapshot", Trusted: true, Supported: true, Editable: true, Target: "codex:1", AtEnd: true, CompositionKnown: true}})
-	a.Receive(desktop.Event{Snapshot: engine.Snapshot{Type: "snapshot", Trusted: true}})
+	snapshot.Type = "translate"
+	a.Receive(desktop.Event{Snapshot: snapshot})
 	a.mu.Lock()
-	armed = a.state.Armed
+	busy = a.state.Busy
+	current := a.state.Current
 	a.mu.Unlock()
-	if !armed {
-		t.Fatal("focus loss disabled mode")
+	if !busy || current.Text != "中文" || current.SelectionStart != 0 {
+		t.Fatal("explicit click snapshot ignored")
 	}
-	saveTest(t, a, `{"baseUrl":"https://example.com/v1","model":"updated","delayMs":800}`, 200)
+	saveTest(t, a, `{"baseUrl":"https://example.com/v1","model":"updated"}`, 200)
 	a.mu.Lock()
-	armed = a.state.Armed
+	busy = a.state.Busy
 	a.mu.Unlock()
-	if !armed {
-		t.Fatal("settings save disabled mode")
+	if busy {
+		t.Fatal("settings change kept old request active")
 	}
-	a.Receive(desktop.Event{Snapshot: engine.Snapshot{Type: "pause"}})
-	a.Receive(desktop.Event{Snapshot: engine.Snapshot{Type: "snapshot", Trusted: true, Supported: true, Editable: true, Target: "codex:1", AtEnd: true, CompositionKnown: true}})
+	snapshot.Type = "snapshot"
+	a.Receive(desktop.Event{Snapshot: snapshot})
 	a.mu.Lock()
-	armed = a.state.Armed
+	busy = a.state.Busy
 	a.mu.Unlock()
-	if armed {
-		t.Fatal("focus enabled explicitly paused mode")
+	if busy {
+		t.Fatal("snapshot restarted request")
 	}
 }
 

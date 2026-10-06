@@ -1,7 +1,7 @@
 import Cocoa
 import ApplicationServices
 
-// One whole-draft write after the quiet period. Never select a fragment, use the
+// One whole-draft write after an explicit user request. Never select a fragment, use the
 // clipboard, or synthesize keys. Restore the caret once after the editor settles.
 final class DraftWriter {
     let element: AXUIElement

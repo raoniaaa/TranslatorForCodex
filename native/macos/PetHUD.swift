@@ -9,7 +9,7 @@ final class StatusPanel: NSPanel {
 final class PetView: NSView {
     var phase = "idle"
     var message = "你好，我是翻译助手"
-    var detail = "点击开启 · 拖动挪位置"
+    var detail = "点击翻译整段 · 拖动挪位置"
     var onClick: (() -> Void)?
     var onDragEnd: (() -> Void)?
     var onSettings: (() -> Void)?
@@ -39,7 +39,7 @@ final class PetView: NSView {
     }
     override func rightMouseDown(with event: NSEvent) {
         let menu = NSMenu()
-        for (title, action) in [("开启 / 暂停翻译", #selector(toggle)), ("翻译服务设置…", #selector(settings)), ("检查辅助功能权限…", #selector(permissions)), ("回到输入框旁", #selector(reset))] {
+        for (title, action) in [("翻译当前整段草稿", #selector(toggle)), ("翻译服务设置…", #selector(settings)), ("检查辅助功能权限…", #selector(permissions)), ("回到输入框旁", #selector(reset))] {
             let item = menu.addItem(withTitle: title, action: action, keyEquivalent: ""); item.target = self
         }
         NSMenu.popUpContextMenu(menu, with: event, for: self)
@@ -120,7 +120,7 @@ final class HUD {
         panel.contentView = pet
         panel.setAccessibilityLabel("Translator 翻译宠物")
         pet.setAccessibilityElement(true); pet.setAccessibilityRole(.button)
-        pet.setAccessibilityHelp("点击开启或暂停翻译，拖动移动，右键打开设置")
+        pet.setAccessibilityHelp("点击翻译当前整段草稿，拖动移动，右键打开设置")
         if let p = UserDefaults.standard.array(forKey: "translator.pet.origin") as? [Double], p.count == 2 { savedOrigin = NSPoint(x: p[0], y: p[1]) }
         pet.onDragEnd = { [weak self] in
             guard let self = self else { return }
@@ -128,15 +128,19 @@ final class HUD {
             self.panel.setFrameOrigin(p); self.savedOrigin = p
             UserDefaults.standard.set([Double(p.x), Double(p.y)], forKey: "translator.pet.origin")
         }
-        pet.onReset = { [weak self] in self?.savedOrigin = nil; self?.sessionOrigin = nil; UserDefaults.standard.removeObject(forKey: "translator.pet.origin") }
+        pet.onReset = { [weak self] in self?.resetPosition() }
         animation = Timer(timeInterval: 1.0 / 15, repeats: true) { [weak self] _ in
             guard let self = self, self.panel.isVisible else { return }; self.pet.needsDisplay = true
         }
         RunLoop.main.add(animation!, forMode: .common)
     }
+    func resetPosition() {
+        savedOrigin = nil; sessionOrigin = nil
+        UserDefaults.standard.removeObject(forKey: "translator.pet.origin")
+    }
     func update(phase: String, message: String, detail: String) {
         pet.phase = phase; pet.message = message; pet.detail = detail
-        pet.setAccessibilityLabel("\(message)。\(detail)"); pet.toolTip = "\(message)\n\(detail)\n点击开启 / 暂停 · 拖动移动 · 右键设置"
+        pet.setAccessibilityLabel("\(message)。\(detail)"); pet.toolTip = "\(message)\n\(detail)\n点击翻译整段 · 拖动移动 · 右键设置"
         pet.needsDisplay = true
     }
     private func clamp(_ p: NSPoint) -> NSPoint {

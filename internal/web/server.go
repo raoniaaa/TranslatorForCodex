@@ -58,10 +58,10 @@ type preferences struct {
 	DelayMS int    `json:"delayMs"`
 }
 
-func Start(root string, demo bool) (*App, error) {
-	return startWithStore(root, demo, credentials.New(root))
+func Start(root string, demo bool, hosted ...bool) (*App, error) {
+	return startWithStore(root, demo, credentials.New(root), hosted...)
 }
-func startWithStore(root string, demo bool, secrets credentials.Store) (*App, error) {
+func startWithStore(root string, demo bool, secrets credentials.Store, hosted ...bool) (*App, error) {
 	a := &App{state: engine.New(), stop: make(chan struct{}), previewSlots: make(chan struct{}, 2), secrets: secrets}
 	dir := credentials.ConfigDir()
 	if dir != "" {
@@ -127,14 +127,17 @@ func startWithStore(root string, demo bool, secrets credentials.Store) (*App, er
 			return
 		}
 		a.mu.Lock()
-		a.state.Reset("翻译模式已关闭，点击宠物可再次开启")
+		a.state.Reset("已取消本次翻译，写好后点击宠物")
+		if a.bridge != nil {
+			_ = a.bridge.Send(map[string]string{"type": "cancel-write"})
+		}
 		if a.cancel != nil {
 			a.cancel()
 		}
 		a.mu.Unlock()
 		reply(w, map[string]bool{"ok": true})
 	})
-	for _, action := range []string{"permission", "recheck-permission", "reveal-app", "connect", "demo"} {
+	for _, action := range []string{"permission", "recheck-permission", "reveal-app", "connect", "show-pet", "demo"} {
 		action := action
 		mux.HandleFunc(prefix+"api/"+action, func(w http.ResponseWriter, r *http.Request) {
 			if !post(w, r) {
@@ -178,7 +181,13 @@ func startWithStore(root string, demo bool, secrets credentials.Store) (*App, er
 	})}
 	go a.server.Serve(listener)
 	if !demo {
-		bridge, err := desktop.Start(root, a.URL, a.Receive)
+		var bridge *desktop.Bridge
+		var err error
+		if len(hosted) > 0 && hosted[0] {
+			bridge = desktop.Attach(a.Receive)
+		} else {
+			bridge, err = desktop.Start(root, a.URL, a.Receive)
+		}
 		a.mu.Lock()
 		a.bridge = bridge
 		if err != nil {
@@ -218,17 +227,19 @@ func (a *App) Receive(e desktop.Event) {
 	switch e.Type {
 	case "snapshot":
 		a.state.Observe(e.Snapshot, time.Now())
-	case "toggle", "connect":
+	case "translate":
 		if a.config.Model == "" || a.config.BaseURL == "" {
 			a.state.Phase = "error"
 			a.state.Status = "请先在设置中填写 API 地址和模型"
 			return
 		}
-		if e.Type != "connect" || !a.state.Armed {
-			a.state.Toggle(time.Now())
-		}
+		a.state.Request(e.Snapshot, time.Now())
+
 	case "pause":
-		a.state.Reset("翻译模式已关闭，点击宠物可再次开启")
+		a.state.Reset("已取消本次翻译，写好后点击宠物")
+		if a.bridge != nil {
+			_ = a.bridge.Send(map[string]string{"type": "cancel-write"})
+		}
 	case "undo":
 		if r := a.state.Undo(); r != nil && a.bridge != nil {
 			if err := a.bridge.Send(r); err != nil {
@@ -282,7 +293,7 @@ func (a *App) loop() {
 					}
 				}(*job)
 			}
-			hud := map[string]any{"type": "status", "phase": a.state.Phase, "message": a.state.Status, "armed": a.state.Armed, "model": a.config.Model, "configured": a.config.BaseURL != "" && a.config.Model != ""}
+			hud := map[string]any{"type": "status", "phase": a.state.Phase, "message": a.state.Status, "busy": a.state.Busy, "model": a.config.Model, "configured": a.config.BaseURL != "" && a.config.Model != ""}
 			data, _ := json.Marshal(hud)
 			if string(data) != a.lastHUD && a.bridge != nil {
 				_ = a.bridge.Send(hud)
@@ -348,6 +359,9 @@ func (a *App) configure(w http.ResponseWriter, r *http.Request) {
 		bad(w, errors.New("请输入模型名称"))
 		return
 	}
+	if input.DelayMS == 0 {
+		input.DelayMS = 2000
+	}
 	if input.DelayMS < 400 || input.DelayMS > 3000 {
 		bad(w, errors.New("停顿时间须为 400–3000 毫秒"))
 		return
@@ -406,11 +420,11 @@ func (a *App) configure(w http.ResponseWriter, r *http.Request) {
 	if a.cancel != nil {
 		a.cancel()
 	}
-	wasEnabled := a.state.Armed
-	a.state.Reset("设置已保存在本机；点击宠物开启翻译模式")
-	if wasEnabled {
-		a.state.Toggle(time.Now())
+	a.state.Reset("设置已保存在本机；写好后点击宠物翻译")
+	if a.bridge != nil {
+		_ = a.bridge.Send(map[string]string{"type": "cancel-write"})
 	}
+
 	a.config = input.Config
 	a.state.DelayMS = input.DelayMS
 	reply(w, map[string]bool{"ok": true, "hasKey": a.config.APIKey != "", "keyStored": a.keyID != ""})
