@@ -62,7 +62,7 @@ namespace Translator.Windows
                 app.quit = new EventWaitHandle(false, EventResetMode.AutoReset, "Local\\CodexTranslatorQuit-" + suffix);
                 app.Startup += delegate {
                     try { app.Start(); }
-                    catch { MessageBox.Show("Translator 启动失败。请完整解压应用文件夹后再运行。", "Translator"); app.Shutdown(1); }
+                    catch { MessageBox.Show("Translator 启动失败。请完整解压应用文件夹后再运行。", "Translator"); app.Quit(1); }
                 };
                 app.Exit += delegate { app.Stop(); };
                 app.Run();
@@ -98,7 +98,7 @@ namespace Translator.Windows
             menu.Items.Add("前往 Codex", null, delegate { GoToCodex(); });
             menu.Items.Add("找回翻译宠物", null, delegate { pet.ResetPosition(); GoToCodex(); });
             menu.Items.Add("取消本次翻译", null, delegate { pet.Cancel(); });
-            menu.Items.Add("退出 Translator", null, delegate { Shutdown(); });
+            menu.Items.Add("退出 Translator", null, delegate { Quit(); });
             tray.ContextMenuStrip = menu;
             tray.DoubleClick += delegate { OpenSettings(); };
             var info = new ProcessStartInfo(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "translator-server.exe"), "--native-hosted") {
@@ -119,7 +119,7 @@ namespace Translator.Windows
                 } catch { }
             };
             backend.ErrorDataReceived += delegate { }; // Never log drafts, provider errors or secrets.
-            backend.Exited += delegate { if (!closing) Dispatcher.BeginInvoke(new Action(delegate { MessageBox.Show("翻译服务已退出，请重新打开 Translator。", "Translator"); Shutdown(1); })); };
+            backend.Exited += delegate { if (!closing) Dispatcher.BeginInvoke(new Action(delegate { MessageBox.Show("翻译服务已退出，请重新打开 Translator。", "Translator"); Quit(1); })); };
             backend.Start(); backend.BeginOutputReadLine(); backend.BeginErrorReadLine();
             var worker = new Thread(delegate() {
                 composer = new Composer();
@@ -144,7 +144,7 @@ namespace Translator.Windows
                 while (!closing) {
                     int signal = WaitHandle.WaitAny(new WaitHandle[] { reopen, quit });
                     if (closing) break;
-                    Dispatcher.BeginInvoke(new Action(delegate { if (signal == 1) Shutdown(); else OpenSettings(); }));
+                    Dispatcher.BeginInvoke(new Action(delegate { if (signal == 1) Quit(); else OpenSettings(); }));
                 }
             }) { IsBackground = true }.Start();
             foregroundCallback = delegate { UpdateForeground(); };
@@ -212,12 +212,12 @@ namespace Translator.Windows
         void OpenSettings()
         {
             if (closing || url == null) return;
-            if (settings == null) { settings = new SettingsWindow(url, directory); settings.Closed += delegate { settings = null; }; }
+            if (settings == null) { settings = new SettingsWindow(url, directory); MainWindow = settings; settings.Closed += delegate { settings = null; }; }
             settings.Show(); settings.WindowState = WindowState.Normal; settings.Activate();
         }
         void GoToCodex()
         {
-            try { if (settings != null) settings.Hide(); Native.GoToCodex(); UpdateForeground(); }
+            try { if (settings != null) settings.MinimizeToTaskbar(); Native.GoToCodex(); UpdateForeground(); }
             catch (Exception e) { MessageBox.Show(e.Message, "Translator"); }
         }
         void UpdateForeground()
@@ -246,6 +246,12 @@ namespace Translator.Windows
             if (closing || backend == null) return;
             try { lock (sendLock) { byte[] bytes = Encoding.UTF8.GetBytes(json.Serialize(value) + "\n"); backend.StandardInput.BaseStream.Write(bytes, 0, bytes.Length); backend.StandardInput.BaseStream.Flush(); } } catch { }
         }
+        void Quit(int exitCode = 0)
+        {
+            closing = true;
+            if (settings != null) settings.AllowClose = true;
+            Shutdown(exitCode);
+        }
         void Stop()
         {
             closing = true; Interlocked.Increment(ref writeEpoch);
@@ -263,6 +269,8 @@ namespace Translator.Windows
         static int Number(Dictionary<string, object> value, string key) { object item; return value.TryGetValue(key, out item) ? Convert.ToInt32(item) : -1; }
         static System.Drawing.Icon CreateIcon()
         {
+            var applicationIcon = System.Drawing.Icon.ExtractAssociatedIcon(typeof(App).Assembly.Location);
+            if (applicationIcon != null) return applicationIcon;
             using (var bitmap = new System.Drawing.Bitmap(32, 32)) {
                 using (var graphics = System.Drawing.Graphics.FromImage(bitmap)) {
                     graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;

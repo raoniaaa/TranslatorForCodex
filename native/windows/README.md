@@ -33,8 +33,19 @@ saving are disabled. Configuration stays separate from application binaries.
 
 Write the entire draft, commit Chinese input, then click the pet or press
 **Ctrl+T**. **Ctrl+Alt+R** restores the last translated draft if it is unchanged.
-Hotkeys are registered only while Codex is foreground. Closing settings keeps
-the tray companion running; reopening the shortcut returns to settings.
+Hotkeys are registered only while Codex is foreground. Closing settings or
+returning to Codex minimizes the settings window while
+keeping its taskbar icon. Click that taskbar button to restore settings; the tray
+menu provides an explicit Quit action. The title bar, taskbar, tray and installed
+shortcuts use the executable's embedded Translator icon. Reopening the shortcut
+also returns to settings.
+
+To check the settings lifecycle in an isolated service/SSH session, build the app
+and run `scripts/test-windows-adapter.ps1 -AppPath dist/windows/Translator.exe`.
+This checks taskbar window styles, the native icon, minimize/close/restore and
+explicit exit using the actual settings window. It does not inspect real drafts
+or use saved API settings. This check does not replace verifying the Explorer
+taskbar button on the signed-in desktop.
 
 The Windows guard queries `IUIAutomationTextEditPattern.GetActiveComposition`
 and refuses replacement if the composition state is unknown or active. It also

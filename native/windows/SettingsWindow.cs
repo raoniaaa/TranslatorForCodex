@@ -1,6 +1,8 @@
 using System;
 using System.IO;
 using System.Windows;
+using System.Windows.Interop;
+using System.Windows.Media.Imaging;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 
@@ -10,11 +12,24 @@ namespace Translator.Windows
     {
         readonly WebView2 browser = new WebView2();
         bool initialized;
+        internal bool AllowClose;
         internal SettingsWindow(string url, string configDirectory)
         {
             Title = "Translator · Codex 输入翻译"; Width = 1100; Height = 810;
             MinWidth = 760; MinHeight = 620; WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            ShowInTaskbar = true;
+            using (var icon = System.Drawing.Icon.ExtractAssociatedIcon(typeof(SettingsWindow).Assembly.Location)) {
+                if (icon != null) {
+                    var image = Imaging.CreateBitmapSourceFromHIcon(icon.Handle, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
+                    image.Freeze(); Icon = image;
+                }
+            }
             Background = System.Windows.Media.Brushes.Black; Content = browser;
+            Closing += delegate(object sender, System.ComponentModel.CancelEventArgs e) {
+                if (AllowClose) return;
+                e.Cancel = true;
+                MinimizeToTaskbar();
+            };
             Loaded += async delegate {
                 if (initialized) return;
                 initialized = true;
@@ -39,6 +54,12 @@ namespace Translator.Windows
                 }
             };
             Closed += delegate { browser.Dispose(); };
+        }
+        internal void MinimizeToTaskbar()
+        {
+            // Keep a real taskbar window so a click can restore settings.
+            // Hide() would remove the user's entry point to the running app.
+            WindowState = WindowState.Minimized;
         }
     }
 }
