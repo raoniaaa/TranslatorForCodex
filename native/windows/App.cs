@@ -133,6 +133,9 @@ namespace Translator.Windows
                             if (diagnostics) snapshotMetadata = new {
                                 observedAt = DateTime.UtcNow.ToString("o"), supported = snapshot["supported"],
                                 known = snapshot["compositionKnown"], composing = snapshot.ContainsKey("composing") && Convert.ToBoolean(snapshot["composing"]),
+                                activeCompositionLength = composer.ActiveCompositionLength,
+                                compositionEvents = composer.CompositionEventMetadata(),
+                                captureStage = composer.CaptureStage,
                                 textLength = Text(snapshot, "text").Length
                             };
                         }

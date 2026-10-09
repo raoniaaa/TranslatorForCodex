@@ -48,12 +48,33 @@ or use saved API settings. This check does not replace verifying the Explorer
 taskbar button on the signed-in desktop.
 
 The Windows guard queries `IUIAutomationTextEditPattern.GetActiveComposition`
-and refuses replacement if the composition state is unknown or active. It also
-rechecks the focused control, exact text and selection, and user input before
-moving the caret. Attachments and other embedded controls are outside the
-plain-text preview scope.
+and listens for TextEdit/TextChanged events on the Codex window, with separate
+state for each editor's runtime identity. Chromium can retain a committed TSF
+range and omit CompositionFinalized, so a non-null range alone does not prove
+that selection is still active. The guard requires a text-change event, a range
+that differs from the last active composition string, and a settled event stream
+before accepting that committed range. Ordinary text events or a pause alone
+never release the guard. Replacement is refused if the state is unknown or active.
+It also rechecks the focused control, exact text and selection, and user input
+before moving the caret. Typed or pasted text can include noninteractive
+paragraph groups and lists; their descendants are checked recursively.
+Attachments and other embedded controls are outside the plain-text preview scope.
 
 ## Compatibility probe
+
+The composition state regression tests run without opening a window or reading
+real drafts, including on the interactive desktop:
+
+```powershell
+.\scripts\test-windows-composition.ps1
+```
+
+They cover retained ranges after commitment, ongoing preedit, delayed events,
+new composition, independent state across chat switches, and pasted text/list
+structure checks. They do not replace testing the actual IME in Codex.
+To collect metadata during a real reproduction,
+start `Translator.exe --diagnostics`; `diagnostics/app-state.json` records hotkey
+counts and composition lengths, never the composition text or API key.
 
 The read-only probe checks the installed Codex desktop app.
 It does not translate, replace text, send keys, access the clipboard, or change
